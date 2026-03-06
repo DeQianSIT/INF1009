@@ -1,0 +1,18 @@
+# Java
+*.class
+*.jar
+*.war
+bin/
+build/
+out/
+
+# Eclipse
+.project
+.classpath
+.settings/
+hs_err_*.log
+replay_*.log
+
+# OS
+.DS_Store
+Thumbs.db
