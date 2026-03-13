@@ -641,7 +641,7 @@ public class PlayableGame extends JPanel implements KeyListener, Runnable {
         if (goodFoods != null) {
             for (FoodItem f : goodFoods) {
                 if (f != null && f.isActive()) {
-                    drawFoodItem(g2d, f, new Color(50, 180, 80), new Color(80, 220, 120));
+                    drawFoodItem(g2d, f, true);
                 }
             }
         }
@@ -649,7 +649,7 @@ public class PlayableGame extends JPanel implements KeyListener, Runnable {
         if (badFoods != null) {
             for (FoodItem f : badFoods) {
                 if (f != null && f.isActive()) {
-                    drawFoodItem(g2d, f, new Color(220, 80, 80), new Color(255, 120, 120));
+                    drawFoodItem(g2d, f, true);
                 }
             }
         }
@@ -676,23 +676,31 @@ public class PlayableGame extends JPanel implements KeyListener, Runnable {
         }
     }
     
-    private void drawFoodItem(Graphics2D g2d, FoodItem f, Color fill, Color highlight) {
+    private void drawFoodItem(Graphics2D g2d, FoodItem f, boolean useImage) {
         if (!f.isActive()) return;
         int x = (int)(f.getX() - f.getWidth() / 2);
         int y = (int)(f.getY() - f.getHeight() / 2);
         int w = (int)f.getWidth(), h = (int)f.getHeight();
         
-        g2d.setColor(fill);
-        g2d.fillOval(x, y, w, h);
-        g2d.setColor(fill.darker());
-        g2d.setStroke(new BasicStroke(2));
-        g2d.drawOval(x, y, w, h);
-        
-        g2d.setColor(Color.WHITE);
-        g2d.setFont(new Font("Arial", Font.PLAIN, 10));
-        String name = f.getFoodName();
-        int tw = g2d.getFontMetrics().stringWidth(name);
-        g2d.drawString(name, x + (w - tw) / 2, y + h / 2 + 4);
+        Image img = useImage ? FoodImageLoader.getFoodImage(f.getFoodName()) : null;
+        if (img != null) {
+            g2d.drawImage(img, x, y, w, h, null);
+            g2d.setColor(new Color(255, 255, 255, 100));
+            g2d.setStroke(new BasicStroke(1));
+            g2d.drawRoundRect(x, y, w, h, 4, 4);
+        } else {
+            Color fill = f.isGoodFood() ? new Color(50, 180, 80) : new Color(220, 80, 80);
+            g2d.setColor(fill);
+            g2d.fillOval(x, y, w, h);
+            g2d.setColor(fill.darker());
+            g2d.setStroke(new BasicStroke(2));
+            g2d.drawOval(x, y, w, h);
+            g2d.setColor(Color.WHITE);
+            g2d.setFont(new Font("Arial", Font.PLAIN, 10));
+            String name = f.getFoodName();
+            int tw = g2d.getFontMetrics().stringWidth(name);
+            g2d.drawString(name, x + (w - tw) / 2, y + h / 2 + 4);
+        }
     }
     
     private void drawGameOver(Graphics2D g2d) {
