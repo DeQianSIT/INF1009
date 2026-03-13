@@ -11,14 +11,16 @@ import engine.collision.ICollisionListener;
 import javax.swing.*;
 import java.awt.*;
 import java.awt.event.*;
+import java.lang.reflect.InvocationTargetException;
 
 /**
- * Complete Interactive Simulation with Menu, Pause, and Simulation Over screens
+ * Nutrition Game - Collect good food, answer quiz on bad food touch.
+ * Features: good/bad food items, quiz with 30s countdown, round backgrounds, powerups.
  */
 public class PlayableGame extends JPanel implements KeyListener, Runnable {
     private static final int WINDOW_WIDTH = 800;
     private static final int WINDOW_HEIGHT = 600;
-    private static final String TITLE = "Abstract Engine - Complete Demo";
+    private static final String TITLE = "Nutrition Quest";
     
     // Engine components
     private GameMaster gameMaster;
@@ -36,7 +38,8 @@ public class PlayableGame extends JPanel implements KeyListener, Runnable {
     private engine.scene.EndScene endScene;
     
     // Game objects
-    private java.util.List<NPC> npcs;
+    private java.util.List<FoodItem> goodFoods;
+    private java.util.List<FoodItem> badFoods;
     private java.util.List<TextureObject> objects;
     
     // Game state
@@ -53,9 +56,48 @@ public class PlayableGame extends JPanel implements KeyListener, Runnable {
     private int frameCount = 0;
     private long fpsTimer = 0;
     
+    // Round & background (0-4 = different biomes)
+    private int currentRound = 0;
+    private static final Color[][] ROUND_BACKGROUNDS = {
+        { new Color(30, 50, 30), new Color(40, 70, 40) },   // Forest green
+        { new Color(40, 50, 70), new Color(60, 80, 110) },  // Beach blue
+        { new Color(50, 40, 35), new Color(80, 60, 50) },   // Mountain brown
+        { new Color(25, 45, 55), new Color(45, 75, 90) },   // River teal
+        { new Color(45, 35, 55), new Color(70, 55, 85) }    // Sunset purple
+    };
+    
+    // Bad food base speed, increases after each quiz
+    private float badFoodBaseSpeed = 80f;
+    private static final float BAD_FOOD_SPEED_INCREMENT = 25f;
+    
+    // Powerups
+    private int powerupsRedeemed = 0;
+    private static final int[] POWERUP_THRESHOLDS = { 10, 25, 50, 100 };
+    private boolean powerupAvailable = false;
+    private String activePowerup = null;
+    private float powerupTimer = 0f;
+    private boolean shieldActive = false;      // Ignore next bad food
+    private boolean freezeActive = false;      // Freeze bad food for 5s
+    private boolean doublePointsActive = false; // 2x points for 10s
+    
+    // Quiz data: { question, opt1, opt2, opt3, opt4, correctIndex (0-3) }
+    private static final String[][] QUIZ_QUESTIONS = {
+        { "Which vitamin is abundant in oranges?", "Vitamin A", "Vitamin C", "Vitamin D", "Vitamin K", "1" },
+        { "Which food is a good source of protein?", "Candy", "Chicken", "Soda", "Chips", "1" },
+        { "What is a healthy breakfast choice?", "Donut", "Oatmeal", "Fries", "Cookie", "1" },
+        { "Which helps build strong bones?", "Sugar", "Calcium", "Salt", "Oil", "1" },
+        { "Which is a whole grain?", "White bread", "Brown rice", "Cake", "Candy", "1" },
+        { "What should you drink most of?", "Soda", "Energy drink", "Water", "Milkshake", "2" },
+        { "Which food is high in fiber?", "Ice cream", "Broccoli", "Candy", "Chips", "1" },
+        { "What nutrient do carrots provide?", "Protein", "Vitamin A", "Fat", "Sugar", "1" },
+        { "Which is a healthy snack?", "Apple", "Cookie", "Candy bar", "Cake", "0" },
+        { "What does iron help with?", "Taste", "Blood health", "Smell", "Hair color", "1" }
+    };
+    private int quizIndex = 0;
+    
     // Menu
     private int menuSelection = 0;
-    private String[] menuOptions = {"Start Simulation", "Instructions", "Exit"};
+    private String[] menuOptions = {"Start Game", "Instructions", "Exit"};
     private long lastKeyPress = 0;
     private static final long KEY_COOLDOWN = 200;
 
@@ -110,10 +152,20 @@ public class PlayableGame extends JPanel implements KeyListener, Runnable {
         paused = false;
         score = 0;
         gameTime = 0;
+        currentRound = 0;
+        badFoodBaseSpeed = 80f;
+        powerupAvailable = false;
+        powerupsRedeemed = 0;
+        activePowerup = null;
+        shieldActive = false;
+        freezeActive = false;
+        doublePointsActive = false;
         
-        if (npcs == null) npcs = new java.util.ArrayList<>();
+        if (goodFoods == null) goodFoods = new java.util.ArrayList<>();
+        if (badFoods == null) badFoods = new java.util.ArrayList<>();
         if (objects == null) objects = new java.util.ArrayList<>();
-        npcs.clear();
+        goodFoods.clear();
+        badFoods.clear();
         objects.clear();
         
         float playerX = WINDOW_WIDTH / 2f;
@@ -130,24 +182,34 @@ public class PlayableGame extends JPanel implements KeyListener, Runnable {
         
         java.util.Random rnd = new java.util.Random();
         int padding = 60;
-        float safeRadius = 130f;
+        float safeRadius = 100f;
         
-        // Spawn 15 NPCs with randomized positions (5 patrol=red, 10 wander=pink)
-        String[] behaviors = {"patrol", "patrol", "patrol", "patrol", "patrol",
-                              "wander", "wander", "wander", "wander", "wander",
-                              "wander", "wander", "wander", "wander", "wander"};
-        for (String behavior : behaviors) {
+        // Good food items (green) - collect for points
+        String[] goodNames = {"Apple", "Banana", "Broccoli", "Carrot", "Orange", "Grapes", "Spinach", "Tomato"};
+        String[] goodBehaviors = {"wander", "wander", "patrol", "wander", "patrol", "wander", "patrol", "wander"};
+        for (int i = 0; i < goodNames.length; i++) {
             float x, y;
             do {
                 x = padding + rnd.nextFloat() * (WINDOW_WIDTH  - 2 * padding);
                 y = padding + rnd.nextFloat() * (WINDOW_HEIGHT - 2 * padding);
             } while (dist(x, y, playerX, playerY) < safeRadius);
-            createNPC(x, y, behavior);
+            createGoodFood(x, y, goodBehaviors[i], goodNames[i]);
         }
         
-        // Spawn 10 obstacles with randomized positions and varied sizes
-        int[][] sizes = {{60,60},{80,40},{50,50},{70,70},{90,35},
-                         {55,55},{75,45},{65,65},{85,50},{50,70}};
+        // Bad food items (red) - touch triggers quiz
+        String[] badNames = {"Burger", "Soda", "Chips", "Candy", "Pizza"};
+        String[] badBehaviors = {"patrol", "wander", "patrol", "wander", "patrol"};
+        for (int i = 0; i < badNames.length; i++) {
+            float x, y;
+            do {
+                x = padding + rnd.nextFloat() * (WINDOW_WIDTH  - 2 * padding);
+                y = padding + rnd.nextFloat() * (WINDOW_HEIGHT - 2 * padding);
+            } while (dist(x, y, playerX, playerY) < safeRadius);
+            createBadFood(x, y, badBehaviors[i], badNames[i]);
+        }
+        
+        // Obstacles
+        int[][] sizes = {{60,60},{80,40},{50,50},{70,70},{55,55},{75,45}};
         for (int[] sz : sizes) {
             float x, y;
             do {
@@ -159,7 +221,7 @@ public class PlayableGame extends JPanel implements KeyListener, Runnable {
         
         setupCollisions();
         
-        System.out.println("\n=== New Simulation Started ===");
+        System.out.println("\n=== Nutrition Quest Started ===");
     }
     
     /** Euclidean distance helper */
@@ -168,13 +230,24 @@ public class PlayableGame extends JPanel implements KeyListener, Runnable {
         return (float) Math.sqrt(dx * dx + dy * dy);
     }
     
-    private void createNPC(float x, float y, String behavior) {
-        NPC npc = new NPC(x, y, behavior);
-        npc.setWidth(32);
-        npc.setHeight(32);
-        npcs.add(npc);
-        entityManager.addEntity(npc);
-        collisionManager.addCollidable(npc, "enemy");
+    private void createGoodFood(float x, float y, String behavior, String name) {
+        FoodItem f = new FoodItem(x, y, behavior, name, true);
+        f.setWidth(32);
+        f.setHeight(32);
+        f.setSpeed(60f);
+        goodFoods.add(f);
+        entityManager.addEntity(f);
+        collisionManager.addCollidable(f, "good_food");
+    }
+    
+    private void createBadFood(float x, float y, String behavior, String name) {
+        FoodItem f = new FoodItem(x, y, behavior, name, false);
+        f.setWidth(32);
+        f.setHeight(32);
+        f.setSpeed(badFoodBaseSpeed);
+        badFoods.add(f);
+        entityManager.addEntity(f);
+        collisionManager.addCollidable(f, "bad_food");
     }
     
     private void createObstacle(float x, float y, float w, float h) {
@@ -187,12 +260,37 @@ public class PlayableGame extends JPanel implements KeyListener, Runnable {
     }
     
     private void setupCollisions() {
-        collisionManager.registerHandler("player", "enemy", new ICollisionListener() {
+        // Good food: collect for points
+        collisionManager.registerHandler("player", "good_food", new ICollisionListener() {
             @Override
             public void onCollision(Entity a, Entity b) {
+                if (!(b instanceof FoodItem)) return;
+                FoodItem f = (FoodItem) b;
+                if (!f.isGoodFood() || !f.isActive()) return;
+                int pts = doublePointsActive ? 2 : 1;
+                score += pts;
                 inputManager.getSpeaker().beep();
-                mainScene.setGameOver(true);
-                System.out.println("=== SIMULATION ENDED ===");
+                f.setActive(false);
+                entityManager.removeEntity(f);
+                collisionManager.removeCollidable(f);
+                goodFoods.remove(f);
+            }
+        });
+        
+        // Bad food: show quiz, +1 if correct, increase speed after
+        collisionManager.registerHandler("player", "bad_food", new ICollisionListener() {
+            @Override
+            public void onCollision(Entity a, Entity b) {
+                if (!(b instanceof FoodItem)) return;
+                FoodItem f = (FoodItem) b;
+                if (!f.isGoodFood() && f.isActive()) {
+                    if (shieldActive) {
+                        shieldActive = false;
+                        inputManager.getSpeaker().beep();
+                        return;
+                    }
+                    handleBadFoodTouch(f);
+                }
             }
         });
         
@@ -237,6 +335,8 @@ public class PlayableGame extends JPanel implements KeyListener, Runnable {
         // Register wall collision for player
         collisionManager.registerHandler("player", "wall", wallCollisionHandler);
         
+        // Food vs wall - use same silent handler via generic listener below
+        
         // Register wall collision for any other entity type (abstract/generic)
         // This allows any entity layer to collide with walls without hardcoding
         collisionManager.addListener(new ICollisionListener() {
@@ -278,6 +378,81 @@ public class PlayableGame extends JPanel implements KeyListener, Runnable {
                 entity.setPosition(entity.getX(), entity.getY() + pushY);
             }
         }
+    }
+    
+    private void showPowerupDialog() {
+        String[] options = { "Freeze (stop bad food 5s)", "Shield (ignore 1 bad food)", "Double Points (10s)" };
+        int choice = JOptionPane.showOptionDialog(this, "Choose a powerup!", "Powerup!",
+            JOptionPane.DEFAULT_OPTION, JOptionPane.INFORMATION_MESSAGE, null, options, options[0]);
+        if (choice < 0) return;
+        powerupAvailable = false;
+        powerupsRedeemed++;
+        activePowerup = choice == 0 ? "freeze" : (choice == 1 ? "shield" : "double");
+        powerupTimer = choice == 0 ? 5f : (choice == 1 ? 0f : 10f);
+        if (choice == 0) freezeActive = true;
+        if (choice == 1) shieldActive = true;
+        if (choice == 2) doublePointsActive = true;
+        inputManager.getSpeaker().beep();
+    }
+    
+    /** Handle bad food touch: show quiz, award point if correct, increase speed, respawn bad food */
+    private void handleBadFoodTouch(FoodItem f) {
+        f.setActive(false);
+        entityManager.removeEntity(f);
+        collisionManager.removeCollidable(f);
+        badFoods.remove(f);
+        
+        String[] q = QUIZ_QUESTIONS[quizIndex % QUIZ_QUESTIONS.length];
+        quizIndex++;
+        String question = q[0];
+        String[] options = { q[1], q[2], q[3], q[4] };
+        int correctIdx = Integer.parseInt(q[5]);
+        
+        Frame frame = null;
+        if (SwingUtilities.getWindowAncestor(this) instanceof Frame) {
+            frame = (Frame) SwingUtilities.getWindowAncestor(this);
+        }
+        if (frame == null && Frame.getFrames().length > 0) {
+            frame = Frame.getFrames()[0];
+        }
+        
+        final Frame parentFrame = frame;
+        final String quizQuestion = question;
+        final String[] quizOpts = options;
+        final int quizCorrect = correctIdx;
+        final boolean[] result = { false };
+        try {
+            if (parentFrame != null) {
+                SwingUtilities.invokeAndWait(() -> {
+                    result[0] = QuizDialog.showQuiz(parentFrame, quizQuestion, quizOpts, quizCorrect);
+                });
+            } else {
+                String answer = (String) JOptionPane.showInputDialog(this, quizQuestion, "Quiz",
+                    JOptionPane.QUESTION_MESSAGE, null, quizOpts, quizOpts[quizCorrect]);
+                result[0] = answer != null && answer.equals(quizOpts[quizCorrect]);
+            }
+        } catch (InterruptedException | InvocationTargetException ex) {
+            result[0] = false;
+        }
+        
+        if (result[0]) {
+            score++;
+            inputManager.getSpeaker().beep();
+        }
+        
+        badFoodBaseSpeed += BAD_FOOD_SPEED_INCREMENT;
+        for (FoodItem bf : new java.util.ArrayList<>(badFoods)) {
+            bf.setSpeed(badFoodBaseSpeed);
+        }
+        
+        java.util.Random rnd = new java.util.Random();
+        int padding = 60;
+        float x = padding + rnd.nextFloat() * (WINDOW_WIDTH - 2 * padding);
+        float y = padding + rnd.nextFloat() * (WINDOW_HEIGHT - 2 * padding);
+        String[] badNames = {"Burger", "Soda", "Chips", "Candy", "Pizza"};
+        String[] badBehaviors = {"patrol", "wander", "patrol", "wander", "patrol"};
+        int idx = rnd.nextInt(badNames.length);
+        createBadFood(x, y, badBehaviors[idx], badNames[idx]);
     }
     
     public void start() {
@@ -347,11 +522,31 @@ public class PlayableGame extends JPanel implements KeyListener, Runnable {
     
     private void updateGameState() {
         engine.scene.Scene current = sceneManager.getActiveScene();
-        if (current != null && "MainScene".equals(current.getSceneName())) {
+        if (current != null && "MainScene".equals(current.getSceneName()) && !mainScene.isGameOver()) {
             gameTime = timeManager.getTotalTime();
-            score = (int)(gameTime * 10);
-            if (!mainScene.isGameOver()) {
-                keepPlayerInBounds();
+            currentRound = Math.min(score / 10, ROUND_BACKGROUNDS.length - 1);
+            keepPlayerInBounds();
+            
+            if (freezeActive) {
+                for (FoodItem bf : badFoods) bf.setSpeed(0);
+            } else {
+                for (FoodItem bf : badFoods) bf.setSpeed(badFoodBaseSpeed);
+            }
+            if (powerupTimer > 0) {
+                powerupTimer -= timeManager.getDeltaTime();
+                if (powerupTimer <= 0) {
+                    if ("freeze".equals(activePowerup)) freezeActive = false;
+                    if ("double".equals(activePowerup)) doublePointsActive = false;
+                    activePowerup = null;
+                }
+            }
+            
+            if (powerupsRedeemed < POWERUP_THRESHOLDS.length && score >= POWERUP_THRESHOLDS[powerupsRedeemed]) {
+                powerupAvailable = true;
+            }
+            
+            if (score >= 50) {
+                mainScene.setGameOver(true);
             }
         }
     }
@@ -397,10 +592,10 @@ public class PlayableGame extends JPanel implements KeyListener, Runnable {
         
         g2d.setColor(Color.YELLOW);
         g2d.setFont(new Font("Arial", Font.BOLD, 48));
-        drawCentered(g2d, "ABSTRACT ENGINE", 150);
+        drawCentered(g2d, "NUTRITION QUEST", 150);
         
         g2d.setFont(new Font("Arial", Font.PLAIN, 24));
-        drawCentered(g2d, "Game Demo", 190);
+        drawCentered(g2d, "Collect Good Food, Learn from Bad!", 190);
         
         g2d.setFont(new Font("Arial", Font.BOLD, 28));
         for (int i = 0; i < menuOptions.length; i++) {
@@ -426,14 +621,15 @@ public class PlayableGame extends JPanel implements KeyListener, Runnable {
     }
     
     private void drawGame(Graphics2D g2d) {
-        g2d.setColor(new Color(30, 30, 30));
+        Color[] bg = ROUND_BACKGROUNDS[Math.min(currentRound, ROUND_BACKGROUNDS.length - 1)];
+        GradientPaint gp = new GradientPaint(0, 0, bg[0], WINDOW_WIDTH, WINDOW_HEIGHT, bg[1]);
+        g2d.setPaint(gp);
         g2d.fillRect(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT);
         
-        g2d.setColor(new Color(50, 50, 50));
+        g2d.setColor(new Color(0, 0, 0, 40));
         for (int x = 0; x < WINDOW_WIDTH; x += 50) g2d.drawLine(x, 0, x, WINDOW_HEIGHT);
         for (int y = 0; y < WINDOW_HEIGHT; y += 50) g2d.drawLine(0, y, WINDOW_WIDTH, y);
         
-        // Draw obstacles
         if (objects != null) {
             for (TextureObject obj : objects) {
                 if (obj != null && obj.isActive()) {
@@ -442,30 +638,61 @@ public class PlayableGame extends JPanel implements KeyListener, Runnable {
             }
         }
         
-        // Draw NPCs
-        if (npcs != null) {
-            for (NPC npc : npcs) {
-                if (npc != null && npc.isActive()) {
-                    Color c = npc.getBehaviorType().equals("patrol") ? new Color(255, 100, 100) : new Color(255, 150, 150);
-                    drawEntity(g2d, npc, c);
+        if (goodFoods != null) {
+            for (FoodItem f : goodFoods) {
+                if (f != null && f.isActive()) {
+                    drawFoodItem(g2d, f, new Color(50, 180, 80), new Color(80, 220, 120));
                 }
             }
         }
         
-        // Draw player
-        if (player != null && player.isActive()) {
-            drawEntity(g2d, player, Color.GREEN);
+        if (badFoods != null) {
+            for (FoodItem f : badFoods) {
+                if (f != null && f.isActive()) {
+                    drawFoodItem(g2d, f, new Color(220, 80, 80), new Color(255, 120, 120));
+                }
+            }
         }
         
-        // Draw UI overlay
+        if (player != null && player.isActive()) {
+            drawEntity(g2d, player, new Color(70, 130, 200));
+        }
+        
         g2d.setColor(new Color(0, 0, 0, 180));
-        g2d.fillRect(0, 0, WINDOW_WIDTH, 50);
+        g2d.fillRect(0, 0, WINDOW_WIDTH, 55);
         g2d.setColor(Color.WHITE);
         g2d.setFont(new Font("Arial", Font.BOLD, 18));
-        g2d.drawString("Score: " + score, 20, 30);
-        g2d.drawString("Time: " + String.format("%.1f", gameTime) + "s", 200, 30);
-        g2d.drawString("FPS: " + fps, 400, 30);
-        g2d.drawString("ESC: Pause", WINDOW_WIDTH - 150, 30);
+        g2d.drawString("Score: " + score, 20, 32);
+        g2d.drawString("Round: " + (currentRound + 1), 150, 32);
+        g2d.drawString("Time: " + String.format("%.1f", gameTime) + "s", 280, 32);
+        g2d.drawString("ESC: Pause", WINDOW_WIDTH - 150, 32);
+        if (powerupAvailable) {
+            g2d.setColor(Color.YELLOW);
+            g2d.drawString("Press P for Powerup!", WINDOW_WIDTH / 2 - 80, 32);
+        }
+        if (activePowerup != null && powerupTimer > 0) {
+            g2d.setColor(Color.CYAN);
+            g2d.drawString(activePowerup.toUpperCase() + ": " + (int) powerupTimer + "s", 450, 32);
+        }
+    }
+    
+    private void drawFoodItem(Graphics2D g2d, FoodItem f, Color fill, Color highlight) {
+        if (!f.isActive()) return;
+        int x = (int)(f.getX() - f.getWidth() / 2);
+        int y = (int)(f.getY() - f.getHeight() / 2);
+        int w = (int)f.getWidth(), h = (int)f.getHeight();
+        
+        g2d.setColor(fill);
+        g2d.fillOval(x, y, w, h);
+        g2d.setColor(fill.darker());
+        g2d.setStroke(new BasicStroke(2));
+        g2d.drawOval(x, y, w, h);
+        
+        g2d.setColor(Color.WHITE);
+        g2d.setFont(new Font("Arial", Font.PLAIN, 10));
+        String name = f.getFoodName();
+        int tw = g2d.getFontMetrics().stringWidth(name);
+        g2d.drawString(name, x + (w - tw) / 2, y + h / 2 + 4);
     }
     
     private void drawGameOver(Graphics2D g2d) {
@@ -587,6 +814,8 @@ public class PlayableGame extends JPanel implements KeyListener, Runnable {
                 timeManager.resume();
                 inputManager.getKeyboard().clearAll();
                 sceneManager.loadScene("MenuScene");
+            } else if (k == KeyEvent.VK_P && !paused && powerupAvailable) {
+                showPowerupDialog();
             }
         } else if (current != null && "EndScene".equals(current.getSceneName())) {
             if (inputManager.isPressed(InputAction.ACTION_1)) {
@@ -628,10 +857,11 @@ public class PlayableGame extends JPanel implements KeyListener, Runnable {
                 break;
             case 1:
                 JOptionPane.showMessageDialog(this,
-                    "CONTROLS:\n• WASD or Arrow Keys - Move\n• ESC - Pause Game\n\n" +
-                    "OBJECTIVE:\n• Avoid the red enemies\n• Navigate around gray obstacles\n" +
-                    "• Survive as long as possible!\n\nSCORING:\n• +10 points per second\n" +
-                    "• Simulation Over if you touch an enemy",
+                    "CONTROLS:\n• WASD or Arrow Keys - Move\n• ESC - Pause, Q - Quit to Menu\n• P - Redeem Powerup (when available)\n\n" +
+                    "OBJECTIVE:\n• Collect GREEN food (good) for +1 point\n• Touch RED food (bad) to answer a quiz\n" +
+                    "• Correct quiz = +1 point; wrong = no point\n• After each quiz, bad food speeds up!\n\n" +
+                    "POWERUPS (at 10, 25, 50, 100 points):\n• Freeze - Stop bad food for 5 seconds\n" +
+                    "• Shield - Ignore the next bad food touch\n• Double Points - 2x points for 10 seconds",
                     "How to Play", JOptionPane.INFORMATION_MESSAGE);
                 break;
             case 2:
@@ -655,8 +885,8 @@ public class PlayableGame extends JPanel implements KeyListener, Runnable {
             game.start();
             
             System.out.println("\n╔════════════════════════════════════════╗");
-            System.out.println("║  Abstract Engine - Complete Version   ║");
-            System.out.println("║  Menu → Play → Pause → Simulation Over ║");
+            System.out.println("║  Nutrition Quest - Healthy Eating Game ║");
+            System.out.println("║  Collect Good Food, Quiz on Bad Food!  ║");
             System.out.println("╚════════════════════════════════════════╝\n");
         });
     }
